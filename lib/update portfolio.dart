@@ -970,6 +970,9 @@ class ProjectsScreen extends StatefulWidget {
 
 class _ProjectsScreenState extends State<ProjectsScreen> {
   List<Map<String, dynamic>> projects = [];
+  bool _isLoading = true;
+  String _selectedCategory = 'All';
+  List<String> _categories = ['All'];
 
   @override
   void initState() {
@@ -978,49 +981,62 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   }
 
   Future<void> _loadProjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String? projectsString = prefs.getString('projects');
-    if (projectsString != null) {
+    try {
+      final response = await http.get(Uri.parse('https://api.github.com/users/sadikhasnat91/repos'));
+      if (response.statusCode == 200) {
+        List<dynamic> repos = json.decode(response.body);
+        projects = [];
+        for (var repo in repos) {
+          if (repo['fork'] == true) continue;
+
+          final topicsResponse = await http.get(
+            Uri.parse('https://api.github.com/repos/${repo['full_name']}/topics'),
+            headers: {'Accept': 'application/vnd.github.mercy-preview+json'},
+          );
+          Map<String, dynamic> topicsData = json.decode(topicsResponse.body);
+          List<dynamic> topics = topicsData['names'] ?? [];
+
+          String category = 'Normal Apps';
+          String lowerName = repo['name'].toLowerCase();
+          String? lowerDesc = repo['description']?.toLowerCase();
+
+          if (topics.contains('ecommerce') || lowerName.contains('commerce') || (lowerDesc?.contains('commerce') ?? false) || (lowerDesc?.contains('ecommerce') ?? false)) {
+            category = 'E-Commerce';
+          } else if (topics.contains('weather') || lowerName.contains('weather') || (lowerDesc?.contains('weather') ?? false)) {
+            category = 'Weather';
+          } else if (topics.contains('fitness') || lowerName.contains('fitness') || (lowerDesc?.contains('fitness') ?? false)) {
+            category = 'Fitness';
+          } else if (topics.contains('paint') || lowerName.contains('paint') || (lowerDesc?.contains('paint') ?? false)) {
+            category = 'Paint';
+          }
+
+          projects.add({
+            'name': repo['name'],
+            'description': repo['description'] ?? 'No description provided.',
+            'image': 'https://opengraph.githubassets.com/1/${repo['full_name']}',
+            'github': repo['html_url'],
+            'demo': repo['homepage']?.isNotEmpty == true ? repo['homepage'] : null,
+            'tags': [
+              if (repo['language'] != null) repo['language'],
+              ...topics,
+            ],
+            'category': category,
+            'pushed_at': repo['pushed_at'],
+          });
+        }
+
+        projects.sort((a, b) => DateTime.parse(b['pushed_at']).compareTo(DateTime.parse(a['pushed_at'])));
+
+        Set<String> categorySet = projects.map((p) => p['category'] as String).toSet();
+        _categories = ['All', ...categorySet.toList()];
+      }
+    } catch (e) {
+      // Handle error silently or show message
+    } finally {
       setState(() {
-        projects = List<Map<String, dynamic>>.from(jsonDecode(projectsString));
+        _isLoading = false;
       });
-    } else {
-      setState(() {
-        projects = initialProjects;
-      });
-      _saveProjects();
     }
-  }
-
-  Future<void> _saveProjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('projects', jsonEncode(projects));
-  }
-
-  void _addProject(Map<String, dynamic> project) {
-    setState(() {
-      projects.add(project);
-    });
-    _saveProjects();
-  }
-
-  void _deleteProject(int index) {
-    setState(() {
-      projects.removeAt(index);
-    });
-    _saveProjects();
-  }
-
-  void _showAddProjectDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AddProjectDialog(
-        onAdd: (project) {
-          _addProject(project);
-          Navigator.of(context).pop();
-        },
-      ),
-    );
   }
 
   @override
@@ -1034,15 +1050,13 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     double bodyFont = isLargeScreen ? 16 : (isTablet ? 14 : 12);
     double horizontalPadding = isLargeScreen ? size.width * 0.1 : (isTablet ? size.width * 0.05 : 16);
     int crossCount = isLargeScreen ? 2 : 1;
-    double childAspect = isLargeScreen ? 1.0 : (isTablet ? 1.0 : 0.7); // Adjusted for better height to prevent overflow
+    double childAspect = isLargeScreen ? 1.0 : (isTablet ? 1.0 : 0.7);
+
+    List<Map<String, dynamic>> filteredProjects = _selectedCategory == 'All'
+        ? projects
+        : projects.where((p) => p['category'] == _selectedCategory).toList();
 
     return Scaffold(
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showAddProjectDialog,
-        backgroundColor: theme.colorScheme.primary,
-        child: const Icon(Icons.add),
-        tooltip: 'Add Project',
-      ).animate().fadeIn(duration: 600.ms).scale(duration: 400.ms),
       body: SingleChildScrollView(
         padding: EdgeInsets.symmetric(
           horizontal: horizontalPadding,
@@ -1061,41 +1075,59 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             ).animate().fadeIn(duration: 600.ms).slideX(begin: -0.3, duration: 400.ms),
             const SizedBox(height: 16),
             Text(
-              'Explore my recent projects showcasing innovative Flutter development. Add or remove projects to customize this portfolio.',
+              'Explore my GitHub projects, automatically updated and categorized.',
               style: GoogleFonts.poppins(
                 fontSize: bodyFont,
                 color: theme.colorScheme.onSurface.withOpacity(0.7),
               ),
             ).animate().fadeIn(delay: 200.ms, duration: 600.ms),
             const SizedBox(height: 16),
-            projects.isEmpty
-                ? Center(
-              child: Text(
-                'No projects yet. Add one using the + button!',
-                style: GoogleFonts.poppins(
-                  fontSize: bodyFont + 2,
-                  color: theme.colorScheme.onSurface.withOpacity(0.5),
-                ),
-              ).animate().fadeIn(delay: 400.ms, duration: 600.ms),
-            )
-                : GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossCount,
-                childAspectRatio: childAspect,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
+            if (!_isLoading)
+              DropdownButton<String>(
+                value: _selectedCategory,
+                onChanged: (value) {
+                  setState(() {
+                    _selectedCategory = value!;
+                  });
+                },
+                items: _categories.map((category) {
+                  return DropdownMenuItem<String>(
+                    value: category,
+                    child: Text(category),
+                  );
+                }).toList(),
               ),
-              itemCount: projects.length,
-              itemBuilder: (context, index) {
-                return _ProjectCard(
-                  project: projects[index],
-                  delay: 400 + (index * 200),
-                  onDelete: () => _deleteProject(index),
-                );
-              },
-            ),
+            const SizedBox(height: 16),
+            if (_isLoading)
+              const Center(child: SpinKitCircle(color: Colors.blue))
+            else if (filteredProjects.isEmpty)
+              Center(
+                child: Text(
+                  'No projects in this category.',
+                  style: GoogleFonts.poppins(
+                    fontSize: bodyFont + 2,
+                    color: theme.colorScheme.onSurface.withOpacity(0.5),
+                  ),
+                ).animate().fadeIn(delay: 400.ms, duration: 600.ms),
+              )
+            else
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossCount,
+                  childAspectRatio: childAspect,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                ),
+                itemCount: filteredProjects.length,
+                itemBuilder: (context, index) {
+                  return _ProjectCard(
+                    project: filteredProjects[index],
+                    delay: 400 + (index * 200),
+                  );
+                },
+              ),
           ],
         ),
       ),
@@ -1106,12 +1138,10 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 class _ProjectCard extends StatefulWidget {
   final Map<String, dynamic> project;
   final int delay;
-  final VoidCallback onDelete;
 
   const _ProjectCard({
     required this.project,
     required this.delay,
-    required this.onDelete,
   });
 
   @override
@@ -1127,7 +1157,6 @@ class _ProjectCardState extends State<_ProjectCard> {
     final size = MediaQuery.of(context).size;
     final isLargeScreen = size.width > 800;
     final isTablet = size.width > 600 && size.width <= 800;
-    final isMobile = size.width <= 600;
 
     double titleFont = isLargeScreen ? 18 : (isTablet ? 17 : 16);
     double bodyFont = isLargeScreen ? 14 : (isTablet ? 13 : 12);
@@ -1159,88 +1188,26 @@ class _ProjectCardState extends State<_ProjectCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                      child: CachedNetworkImage(
-                        imageUrl: widget.project['image'] ?? 'https://via.placeholder.com/400',
-                        height: imageHeight,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) => const Center(
-                          child: SpinKitPulse(color: Colors.blue, size: 40),
-                        ),
-                        errorWidget: (context, url, error) => Container(
-                          height: imageHeight,
-                          color: theme.colorScheme.primary.withOpacity(0.1),
-                          child: Icon(
-                            Icons.image,
-                            size: imageHeight * 0.3,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                  child: CachedNetworkImage(
+                    imageUrl: widget.project['image'] ?? 'https://via.placeholder.com/400',
+                    height: imageHeight,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => const Center(
+                      child: SpinKitPulse(color: Colors.blue, size: 40),
+                    ),
+                    errorWidget: (context, url, error) => Container(
+                      height: imageHeight,
+                      color: theme.colorScheme.primary.withOpacity(0.1),
+                      child: Icon(
+                        Icons.image,
+                        size: imageHeight * 0.3,
+                        color: theme.colorScheme.primary,
                       ),
                     ),
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Visibility(
-                        visible: isMobile || isHovered,
-                        child: IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.redAccent),
-                          onPressed: () {
-                            showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: Text(
-                                  'Delete Project',
-                                  style: GoogleFonts.poppins(
-                                    fontWeight: FontWeight.w600,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
-                                content: Text(
-                                  'Are you sure you want to delete "${widget.project['name']}"?',
-                                  style: GoogleFonts.poppins(
-                                    color: theme.colorScheme.onSurface.withOpacity(0.8),
-                                  ),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.of(context).pop(),
-                                    child: Text(
-                                      'Cancel',
-                                      style: GoogleFonts.poppins(
-                                        color: theme.colorScheme.onSurface.withOpacity(0.7),
-                                      ),
-                                    ),
-                                  ),
-                                  ElevatedButton(
-                                    onPressed: () {
-                                      widget.onDelete();
-                                      Navigator.of(context).pop();
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.redAccent,
-                                      foregroundColor: Colors.white,
-                                    ),
-                                    child: Text(
-                                      'Delete',
-                                      style: GoogleFonts.poppins(
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                          tooltip: 'Delete Project',
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
                 Expanded(
                   child: Padding(
@@ -1362,191 +1329,6 @@ class _ProjectCardState extends State<_ProjectCard> {
         SnackBar(content: Text('Could not launch $url')),
       );
     }
-  }
-}
-
-class AddProjectDialog extends StatefulWidget {
-  final Function(Map<String, dynamic>) onAdd;
-
-  const AddProjectDialog({super.key, required this.onAdd});
-
-  @override
-  State<AddProjectDialog> createState() => _AddProjectDialogState();
-}
-
-class _AddProjectDialogState extends State<AddProjectDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _imageController = TextEditingController();
-  final _githubController = TextEditingController();
-  final _demoController = TextEditingController();
-  final _tagsController = TextEditingController();
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    _imageController.dispose();
-    _githubController.dispose();
-    _demoController.dispose();
-    _tagsController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final size = MediaQuery.of(context).size;
-    final isLargeScreen = size.width > 800;
-
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        width: isLargeScreen ? 400 : double.infinity,
-        padding: const EdgeInsets.all(16),
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Add New Project',
-                  style: GoogleFonts.poppins(
-                    fontSize: isLargeScreen ? 24 : 18,
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _nameController,
-                  decoration: InputDecoration(
-                    labelText: 'Project Name',
-                    hintText: 'Enter project name',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter a project name';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _descriptionController,
-                  maxLines: 3,
-                  decoration: InputDecoration(
-                    labelText: 'Description',
-                    hintText: 'Describe your project...',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                    alignLabelWithHint: true,
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter a description';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _imageController,
-                  decoration: InputDecoration(
-                    labelText: 'Image URL',
-                    hintText: 'Enter image URL (optional)',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _githubController,
-                  decoration: InputDecoration(
-                    labelText: 'GitHub URL',
-                    hintText: 'Enter GitHub URL (optional)',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _demoController,
-                  decoration: InputDecoration(
-                    labelText: 'Demo URL',
-                    hintText: 'Enter demo URL (optional)',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _tagsController,
-                  decoration: InputDecoration(
-                    labelText: 'Tags (comma-separated)',
-                    hintText: 'e.g., Flutter, Firebase, UI/UX',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    filled: true,
-                    fillColor: theme.colorScheme.surface,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: Text(
-                        'Cancel',
-                        style: GoogleFonts.poppins(
-                          color: theme.colorScheme.onSurface.withOpacity(0.7),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () {
-                        if (_formKey.currentState!.validate()) {
-                          widget.onAdd({
-                            'name': _nameController.text,
-                            'description': _descriptionController.text,
-                            'image': _imageController.text.isNotEmpty ? _imageController.text : null,
-                            'github': _githubController.text.isNotEmpty ? _githubController.text : null,
-                            'demo': _demoController.text.isNotEmpty ? _demoController.text : null,
-                            'tags': _tagsController.text.isNotEmpty
-                                ? _tagsController.text.split(',').map((tag) => tag.trim()).toList()
-                                : [],
-                          });
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: theme.colorScheme.primary,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      ),
-                      child: Text(
-                        'Add Project',
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ).animate().fadeIn(duration: 400.ms).scale(duration: 400.ms);
   }
 }
 
@@ -1907,45 +1689,6 @@ final List<Map<String, dynamic>> techStack = [
   {'name': 'Android', 'icon': Icons.android, 'color': Colors.green},
   {'name': 'iOS', 'icon': Icons.apple, 'color': Colors.grey},
   {'name': 'Docker', 'icon': Icons.cloud_queue, 'color': Colors.blue},
-];
-
-final List<Map<String, dynamic>> initialProjects = [
-  {
-    'name': 'E-Commerce App',
-    'description':
-    'A full-featured e-commerce mobile app with cart management, payment integration, and user authentication. Built with Flutter and Firebase.',
-    'image': 'https://images.pexels.com/photos/230544/pexels-photo-230544.jpeg?auto=compress&cs=tinysrgb&w=800',
-    'github': 'https://github.com/sadikhasnat91/Defence_E_Commerce',
-    'demo': 'https://demo.example.com/ecommerce',
-    'tags': ['Flutter', 'Firebase', 'Stripe', 'REST API'],
-  },
-  {
-    'name': 'Weather App',
-    'description':
-    'Beautiful weather forecast app with location-based weather data, 7-day forecasts, and weather maps. Features smooth animations and clean UI.',
-    'image': 'https://images.pexels.com/photos/1118873/pexels-photo-1118873.jpeg?auto=compress&cs=tinysrgb&w=800',
-    'github': 'https://github.com/sadikhasnat/weather-app',
-    'demo': 'https://demo.example.com/weather',
-    'tags': ['Flutter', 'OpenWeather', 'Animations', 'Location'],
-  },
-  {
-    'name': 'Fitness Tracker',
-    'description':
-    'Productivity app for managing daily tasks and projects. Includes categories, due dates, notifications, and progress tracking with Material Design.',
-    'image': 'https://images.pexels.com/photos/3299/postit-scrabble-to-do.jpg?auto=compress&cs=tinysrgb&w=800',
-    'github': 'https://github.com/sadikhasnat91/Update-Fitness-Tracker',
-    'demo': 'https://demo.example.com/tasks',
-    'tags': ['Flutter', 'Hive', 'Notifications', 'Material Design'],
-  },
-  {
-    'name': 'Paint App',
-    'description':
-    'Real-time messaging app with group chats, media sharing, and push notifications. Built with Flutter, Firebase Firestore, and Cloud Functions.',
-    'image': 'https://images.pexels.com/photos/1303081/pexels-photo-1303081.jpeg?auto=compress&cs=tinysrgb&w=800',
-    'github': 'https://github.com/sadikhasnat91/Paint-App',
-    'demo': 'https://demo.example.com/chat',
-    'tags': ['Flutter', 'Firestore', 'Push Notifications', 'Real-time'],
-  },
 ];
 
 final List<Map<String, dynamic>> socialLinks = [
